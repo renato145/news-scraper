@@ -18,10 +18,10 @@ def scrape(link, out_file):
 	try:
 		bs = get_bs(url).select('#article-default')
 	except Exception as e:
-		return f'skipped-{str(e)} ({url}).'
+		return f'skipped-{str(e)} ({url})'
 	
 	if len(bs) == 0:
-		return f'skipped-No element #article-default found ({url}).'
+		return f'skipped-No element #article-default found ({url})'
 	
 	# get title & summary
 	bs = bs[0]
@@ -83,8 +83,8 @@ def scrape(link, out_file):
 
 class ComercioSource(object):
 	"""docstring for Comercio"""
-	def __init__(self, out_file, url='http://elcomercio.pe', sub_url='archivo', tags=[], n_days=1,
-			     read_mode='a', n_threads=-1, auto_mode=True):
+	def __init__(self, out_file, url='http://elcomercio.pe', sub_url='archivo',
+				 tags=[], n_days=1, read_mode='a', n_threads=-1, auto_mode=True):
 		super(ComercioSource, self).__init__()
 		assert read_mode in ['a', 'w'], f"{read_mode} not in ('a','w')."
 		assert n_days > 0, f'{n_days} invalid number of days.'
@@ -95,6 +95,7 @@ class ComercioSource(object):
 		self.n_days = n_days
 		self.sub_url = 'archivo/todas' if sub_url == 'archivo' else sub_url
 		self.out_file = out_file
+		self.log_file = out_file.rpartition('.')[0] + '.log'
 		self.read_mode = read_mode
 		self.n_threads = multiprocessing.cpu_count() if n_threads == -1 else n_threads
 		self.check_file()
@@ -161,6 +162,13 @@ class ComercioSource(object):
 			print(f'{len(links)} links to process.')
 		self.links = links
 
+	def save_logs(self):
+		'''Log skipped files'''
+		with open(self.log_file, 'a') as f:
+			for r in self.last_result:
+				if r.startswith('skipped'):
+					f.writelines(r+'\n')
+
 	def start(self, verbose=True):
 		t0 = time()
 		if verbose:
@@ -172,6 +180,8 @@ class ComercioSource(object):
 			res = executor.map(fun, self.links)
 		
 		self.last_result = list(res)
+		if self.log_file is not None:
+			self.save_logs()
 
 		if verbose:
 			n_rows = np.sum([0 if r.startswith('skipped') else 1 for r in self.last_result])

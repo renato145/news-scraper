@@ -1,0 +1,5 @@
+# All news
+python -m nscraper -f data/data_comercio.csv --days 10 --threads 16
+
+# Politics news
+python -m nscraper -f data/data_comercio_politics.csv --suburl archivo/politica --tags politica --days 10 --threads 16
