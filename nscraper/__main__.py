@@ -9,7 +9,8 @@ from . import ComercioSource
 @click.option('--threads', default=-1)
 @click.option('--readmode', default='a', help="'a' or 'w'")
 def main(filename, suburl, tags, days, threads, readmode):
-	tags = tags.split(',')
+	if isinstanceof(tags, str):
+		tags = tags.split(',')
 	source = ComercioSource(filename, sub_url=suburl, tags=tags, n_days=days,
 						    n_threads=threads, read_mode=readmode)
 
