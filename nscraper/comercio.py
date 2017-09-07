@@ -10,7 +10,7 @@ from collections import Counter
 from urllib.parse import urlsplit
 from concurrent.futures import ThreadPoolExecutor
 
-def scrape(link, out_file):
+def scrape(link, ignore_date):
 	# article object
 	url = link[1]
 	base_path = '://'.join(urlsplit(url)[:2])
@@ -18,10 +18,10 @@ def scrape(link, out_file):
 	try:
 		bs = get_bs(url).select('#article-default')
 	except Exception as e:
-		return f'skipped-{str(e)} ({url})'
+		return '', f'skipped-{str(e)} ({url})'
 	
 	if len(bs) == 0:
-		return f'skipped-No element #article-default found ({url})'
+		return '', f'skipped-No element #article-default found ({url})'
 	
 	# get title & summary
 	bs = bs[0]
@@ -37,9 +37,11 @@ def scrape(link, out_file):
 	try:
 		date = bs.find(class_='news-date').get_text().strip().split(' ')[0]
 		date = datetime.strptime(date, '%d.%m.%Y').strftime('%Y-%m-%d')
+		if date == ignore_date:
+			return '', f'ignored (date == today) ({url})'
+
 	except Exception as e:
-		date = ''
-		errs.append('article date: '+str(e))
+		return '', f'skipped-No date: {str(e)} ({url})'
 
 	# get content
 	try:
@@ -70,21 +72,22 @@ def scrape(link, out_file):
 		tags = ''
 		errs.append('tags: '+str(e))
 
-	# save file
+	# final row
 	line = f'comercio,{link_id},{url},{date},"{title}","{summary}","{text}",{related_news},{tags}\n'
-	with open(out_file, 'a') as f:
-		f.writelines(line)
 
 	if len(errs) == 0:
-		return '1'
+		errs = '1'
 	else:
 		errs = ', '.join(errs)
-		return errs + f' ({url})'
+		errs = errs + f' ({url})'
+
+	return line, errs
 
 class ComercioSource(object):
 	"""docstring for Comercio"""
 	def __init__(self, out_file, url='http://elcomercio.pe', sub_url='archivo',
-				 tags=[], n_days=1, read_mode='a', n_threads=-1, auto_mode=True):
+				 tags=[], n_days=1, read_mode='a', n_threads=-1, auto_mode=True,
+				 ignore_today=True, chunk_size=64):
 		super(ComercioSource, self).__init__()
 		assert read_mode in ['a', 'w'], f"{read_mode} not in ('a','w')."
 		assert n_days > 0, f'{n_days} invalid number of days.'
@@ -92,12 +95,14 @@ class ComercioSource(object):
 			tags = [tags]
 		self.url = url
 		self.tags = tags
-		self.n_days = n_days
+		self.chunk_size = chunk_size
+		self.n_days = n_days + 1 if ignore_today else n_days
 		self.sub_url = 'archivo/todas' if sub_url == 'archivo' else sub_url
 		self.out_file = out_file
 		self.log_file = out_file.rpartition('.')[0] + '.log'
 		self.read_mode = read_mode
 		self.n_threads = multiprocessing.cpu_count() if n_threads == -1 else n_threads
+		self.ignore_today = ignore_today
 		self.check_file()
 		self.load_links()
 		if auto_mode:
@@ -112,8 +117,8 @@ class ComercioSource(object):
 	def load_links(self, verbose=True):
 		t0 = time()
 		link = url_join(self.url, self.sub_url)
-		links = [link]
-		days_minus = lambda x: (date.today() - timedelta(days=x)).strftime('%Y-%m-%d')
+		links = [] if self.ignore_today else [link]
+		days_minus = lambda x: (date.today() - timedelta(days=(x))).strftime('%Y-%m-%d')
 		if self.n_days > 1:
 			links += [url_join(link, days_minus(i)) for i in range(1, self.n_days)]
 
@@ -162,10 +167,10 @@ class ComercioSource(object):
 			print(f'{len(links)} links to process.')
 		self.links = links
 
-	def save_logs(self):
+	def save_logs(self, logs):
 		'''Log skipped files'''
 		with open(self.log_file, 'a') as f:
-			for r in self.last_result:
+			for r in logs:
 				if r.startswith('skipped'):
 					f.writelines(r+'\n')
 
@@ -174,17 +179,33 @@ class ComercioSource(object):
 		if verbose:
 			print(f'Scraping {len(self.links)} links on {self.n_threads} threads...')
 
-		fun = partial(scrape, out_file=self.out_file)
+		ignore_date = date.today().strftime('%Y-%m-%d') if self.ignore_today else ''
+		fun = partial(scrape, ignore_date=ignore_date)
 
-		with ThreadPoolExecutor(self.n_threads) as executor:
-			res = executor.map(fun, self.links)
+		size = len(self.links)
+		cs = self.chunk_size
+		n = np.ceil(len(self.links) / cs).astype(int)
+		n_rows = 0
+
+		for k, (i,j) in enumerate([(i*cs, (i+1)*cs) for i in range(n)]):
+			if verbose:
+				print('...%.f%%' % (k/n*100), end='\r')
+
+			with ThreadPoolExecutor(self.n_threads) as executor:
+				res = executor.map(fun, self.links[i:j])
 		
-		self.last_result = list(res)
-		if self.log_file is not None:
-			self.save_logs()
+			lines, errs = zip(*res)
+
+			with open(self.out_file, 'a') as f:
+				for line in lines:
+					if line != '':
+						f.writelines(line)
+						n_rows += 1
+
+			if self.log_file is not None:
+				self.save_logs(errs)
 
 		if verbose:
-			n_rows = np.sum([0 if r.startswith('skipped') else 1 for r in self.last_result])
 			print('Elapsed: %.2fs' % (time() - t0))
 			print(f'{n_rows} rows added.')
 
